@@ -1,13 +1,13 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, Suspense } from 'react';
 import { useSearchParams } from 'next/navigation';
 import Link from 'next/link';
 import { createClient } from '@/lib/supabase/client';
 import { formatDate, formatTime } from '@/lib/utils';
 import type { Reservation } from '@/types/database';
 
-export default function ConfirmationPage() {
+function ConfirmationContent() {
   const searchParams = useSearchParams();
   const bookingRef = searchParams.get('ref');
   const [reservation, setReservation] = useState<Reservation | null>(null);
@@ -57,7 +57,6 @@ export default function ConfirmationPage() {
       </header>
 
       <main className="max-w-lg mx-auto px-6 py-16 text-center">
-        {/* Success icon */}
         <div className="w-20 h-20 mx-auto mb-6 rounded-full bg-green-100 flex items-center justify-center">
           <svg className="w-10 h-10 text-green-600" fill="none" viewBox="0 0 24 24" strokeWidth={2} stroke="currentColor">
             <path strokeLinecap="round" strokeLinejoin="round" d="M4.5 12.75l6 6 9-13.5" />
@@ -67,7 +66,6 @@ export default function ConfirmationPage() {
         <h1 className="text-3xl font-serif font-bold text-gray-900 mb-2">Reservation Confirmed!</h1>
         <p className="text-gray-500 mb-8">Your table has been reserved. Here are your booking details.</p>
 
-        {/* Booking card */}
         <div className="bg-white rounded-xl border border-gray-200 p-6 text-left space-y-4 mb-8">
           <div className="flex items-center justify-between">
             <span className="text-sm text-gray-500">Booking Reference</span>
@@ -119,5 +117,17 @@ export default function ConfirmationPage() {
         </div>
       </main>
     </div>
+  );
+}
+
+export default function ConfirmationPage() {
+  return (
+    <Suspense fallback={
+      <div className="min-h-screen flex items-center justify-center">
+        <div className="animate-pulse text-gray-400">Loading...</div>
+      </div>
+    }>
+      <ConfirmationContent />
+    </Suspense>
   );
 }

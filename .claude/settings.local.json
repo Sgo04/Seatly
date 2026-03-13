@@ -21,7 +21,8 @@
       "Bash(ssh-keygen -t ed25519 -C \"kyle@seatly\" -f ~/.ssh/id_ed25519 -N \"\")",
       "Bash(ssh -o StrictHostKeyChecking=no -T git@github.com)",
       "Bash(npm install:*)",
-      "Bash(npx next:*)"
+      "Bash(npx next:*)",
+      "Bash(npm run:*)"
     ]
   }
 }
