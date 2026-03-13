@@ -22,7 +22,9 @@
       "Bash(ssh -o StrictHostKeyChecking=no -T git@github.com)",
       "Bash(npm install:*)",
       "Bash(npx next:*)",
-      "Bash(npm run:*)"
+      "Bash(npm run:*)",
+      "Bash(npx tsc:*)",
+      "Bash(echo \"EXIT: $?\")"
     ]
   }
 }

@@ -1,10 +1,10 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useMemo } from 'react';
 import { createClient } from '@/lib/supabase/client';
-import { formatTime, getStatusColor } from '@/lib/utils';
+import { formatTime, getStatusColor, normalizeTime } from '@/lib/utils';
 import AdminLayout from '@/components/admin/AdminLayout';
-import type { Reservation, Guest } from '@/types/database';
+import type { Reservation } from '@/types/database';
 
 interface DashboardStats {
   totalToday: number;
@@ -15,19 +15,20 @@ interface DashboardStats {
 }
 
 export default function DashboardPage() {
-  const supabase = createClient();
+  const supabase = useMemo(() => createClient(), []);
   const [stats, setStats] = useState<DashboardStats>({ totalToday: 0, seated: 0, noShows: 0, upcoming: 0, vipToday: 0 });
   const [reservations, setReservations] = useState<Reservation[]>([]);
   const [loading, setLoading] = useState(true);
-
-  const today = new Date().toISOString().split('T')[0];
+  const [updatingId, setUpdatingId] = useState<string | null>(null);
 
   useEffect(() => {
     fetchDashboard();
   }, []);
 
   async function fetchDashboard() {
-    // Get today's reservations
+    // Compute today fresh each fetch (handles midnight crossover)
+    const today = new Date().toISOString().split('T')[0];
+
     const { data: todayRes } = await supabase
       .from('reservations')
       .select('*')
@@ -56,7 +57,7 @@ export default function DashboardPage() {
       totalToday: reservations.length,
       seated: reservations.filter(r => r.status === 'seated').length,
       noShows: reservations.filter(r => r.status === 'no_show').length,
-      upcoming: reservations.filter(r => r.status === 'confirmed' && r.time >= currentTime).length,
+      upcoming: reservations.filter(r => r.status === 'confirmed' && normalizeTime(r.time) >= currentTime).length,
       vipToday: vipCount,
     });
 
@@ -64,11 +65,33 @@ export default function DashboardPage() {
   }
 
   async function updateStatus(id: string, status: string) {
+    setUpdatingId(id);
     const { error } = await supabase.from('reservations').update({ status }).eq('id', id);
     if (error) {
       alert('Failed to update reservation status. Please try again.');
+      setUpdatingId(null);
       return;
     }
+
+    // If completing a reservation, increment guest visit count
+    if (status === 'completed') {
+      const res = reservations.find(r => r.id === id);
+      if (res?.guest_id) {
+        const { data: guest } = await supabase
+          .from('guests')
+          .select('id, total_visits')
+          .eq('id', res.guest_id)
+          .single();
+        if (guest) {
+          await supabase.from('guests').update({
+            total_visits: guest.total_visits + 1,
+            last_visit_at: new Date().toISOString(),
+          }).eq('id', guest.id);
+        }
+      }
+    }
+
+    setUpdatingId(null);
     fetchDashboard();
   }
 
@@ -143,13 +166,13 @@ export default function DashboardPage() {
                           <div className="flex gap-1">
                             {res.status === 'confirmed' && (
                               <>
-                                <button onClick={() => updateStatus(res.id, 'seated')} className="px-2 py-1 text-xs bg-green-100 text-green-700 rounded hover:bg-green-200 transition">Seat</button>
-                                <button onClick={() => updateStatus(res.id, 'no_show')} className="px-2 py-1 text-xs bg-amber-100 text-amber-700 rounded hover:bg-amber-200 transition">No-Show</button>
-                                <button onClick={() => updateStatus(res.id, 'cancelled')} className="px-2 py-1 text-xs bg-red-100 text-red-700 rounded hover:bg-red-200 transition">Cancel</button>
+                                <button disabled={updatingId === res.id} onClick={() => updateStatus(res.id, 'seated')} className="px-2 py-1 text-xs bg-green-100 text-green-700 rounded hover:bg-green-200 transition disabled:opacity-50">Seat</button>
+                                <button disabled={updatingId === res.id} onClick={() => updateStatus(res.id, 'no_show')} className="px-2 py-1 text-xs bg-amber-100 text-amber-700 rounded hover:bg-amber-200 transition disabled:opacity-50">No-Show</button>
+                                <button disabled={updatingId === res.id} onClick={() => updateStatus(res.id, 'cancelled')} className="px-2 py-1 text-xs bg-red-100 text-red-700 rounded hover:bg-red-200 transition disabled:opacity-50">Cancel</button>
                               </>
                             )}
                             {res.status === 'seated' && (
-                              <button onClick={() => updateStatus(res.id, 'completed')} className="px-2 py-1 text-xs bg-gray-100 text-gray-700 rounded hover:bg-gray-200 transition">Complete</button>
+                              <button disabled={updatingId === res.id} onClick={() => updateStatus(res.id, 'completed')} className="px-2 py-1 text-xs bg-gray-100 text-gray-700 rounded hover:bg-gray-200 transition disabled:opacity-50">Complete</button>
                             )}
                           </div>
                         </td>

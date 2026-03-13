@@ -128,6 +128,15 @@ export default function TablesPage() {
     }
   }
 
+  function cardBorderColor(status: string) {
+    switch (status) {
+      case 'available': return 'border-green-200';
+      case 'reserved': return 'border-blue-200';
+      case 'occupied': return 'border-red-200';
+      default: return 'border-gray-200';
+    }
+  }
+
   return (
     <AdminLayout>
       <div className="mb-8 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
@@ -201,7 +210,7 @@ export default function TablesPage() {
           {tables.map(table => (
             <div
               key={table.id}
-              className={`bg-white rounded-xl border p-5 transition ${!table.is_active ? 'opacity-50' : ''} ${statusBadge(table.currentStatus).replace('bg-', 'border-').split(' ').pop()}`}
+              className={`bg-white rounded-xl border p-5 transition ${!table.is_active ? 'opacity-50' : ''} ${cardBorderColor(table.currentStatus)}`}
             >
               <div className="flex items-center justify-between mb-3">
                 <span className="text-lg font-bold">{table.table_number}</span>

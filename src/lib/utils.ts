@@ -17,9 +17,16 @@ export function calculateEndTime(startTime: string, durationMinutes: number): st
   return format(end, 'HH:mm');
 }
 
-/** Format time for display: "18:30" -> "6:30 PM" */
+/** Normalize time to HH:mm format for consistent comparisons */
+export function normalizeTime(time: string): string {
+  return time.length > 5 ? time.substring(0, 5) : time;
+}
+
+/** Format time for display: "18:30" or "18:30:00" -> "6:30 PM" */
 export function formatTime(time: string): string {
-  const parsed = parse(time, 'HH:mm:ss', new Date());
+  const normalized = normalizeTime(time);
+  const parsed = parse(normalized, 'HH:mm', new Date());
+  if (isNaN(parsed.getTime())) return time;
   return format(parsed, 'h:mm a');
 }
 

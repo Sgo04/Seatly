@@ -25,7 +25,8 @@ export default function AdminLoginPage() {
       return;
     }
 
-    router.push('/admin/dashboard');
+    // Use full page navigation to ensure auth cookies propagate to middleware
+    window.location.href = '/admin/dashboard';
   }
 
   return (

@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { createServerSupabaseClient } from '@/lib/supabase/server';
-import { calculateEndTime } from '@/lib/utils';
+import { calculateEndTime, normalizeTime } from '@/lib/utils';
 
 /**
  * GET /api/availability?date=YYYY-MM-DD&time=HH:mm&partySize=N
@@ -14,19 +14,23 @@ export async function GET(request: NextRequest) {
   const time = searchParams.get('time');
   const partySize = Number(searchParams.get('partySize'));
 
-  if (!date || !time || !partySize) {
-    return NextResponse.json({ error: 'Missing required parameters: date, time, partySize' }, { status: 400 });
+  if (!date || !time || !partySize || partySize < 1 || !Number.isInteger(partySize)) {
+    return NextResponse.json({ error: 'Missing or invalid parameters: date, time, partySize' }, { status: 400 });
   }
 
   const supabase = await createServerSupabaseClient();
 
   // Get dining duration from settings
-  const { data: settings } = await supabase
+  const { data: settings, error: settingsError } = await supabase
     .from('restaurant_settings')
     .select('default_dining_duration_minutes, opening_hours')
     .single();
 
-  const duration = settings?.default_dining_duration_minutes || 90;
+  if (settingsError || !settings) {
+    return NextResponse.json({ error: 'Could not load restaurant settings' }, { status: 500 });
+  }
+
+  const duration = settings.default_dining_duration_minutes || 90;
   const endTime = calculateEndTime(time, duration);
 
   // Get tables that can seat the party
@@ -55,7 +59,9 @@ export async function GET(request: NextRequest) {
   const occupiedTableIds = new Set<string>();
   if (reservations) {
     for (const res of reservations) {
-      const overlaps = time < res.end_time && endTime > res.time;
+      const resTime = normalizeTime(res.time);
+      const resEndTime = normalizeTime(res.end_time);
+      const overlaps = time < resEndTime && endTime > resTime;
       if (overlaps) {
         for (const ta of (res.table_assignments || []) as { table_id: string }[]) {
           occupiedTableIds.add(ta.table_id);
@@ -74,7 +80,7 @@ export async function GET(request: NextRequest) {
     });
   }
 
-  // No tables available at this time — find next available slot
+  // No tables available at this time
   return NextResponse.json({
     available: false,
     message: 'No tables available for this time slot',

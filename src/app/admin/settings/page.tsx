@@ -73,10 +73,13 @@ export default function SettingsPage() {
   }
 
   function updateHour(day: string, field: 'open' | 'close', value: string) {
-    setHours(prev => ({
-      ...prev,
-      [day]: { ...prev[day], [field]: value },
-    }));
+    setHours(prev => {
+      const existing = prev[day] || { open: '', close: '' };
+      return {
+        ...prev,
+        [day]: { ...existing, [field]: value },
+      };
+    });
   }
 
   if (loading) {

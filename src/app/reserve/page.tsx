@@ -1,11 +1,11 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useMemo, useCallback } from 'react';
 import { useRouter } from 'next/navigation';
 import Link from 'next/link';
 import { createClient } from '@/lib/supabase/client';
-import { formatTime, generateTimeSlots, getDayName, generateBookingRef, calculateEndTime } from '@/lib/utils';
-import type { RestaurantSettings, Reservation, Table } from '@/types/database';
+import { formatTime, generateTimeSlots, getDayName, generateBookingRef, calculateEndTime, normalizeTime } from '@/lib/utils';
+import type { RestaurantSettings, Table } from '@/types/database';
 
 interface AvailabilityResult {
   available: boolean;
@@ -15,10 +15,11 @@ interface AvailabilityResult {
 
 export default function ReservePage() {
   const router = useRouter();
-  const supabase = createClient();
+  const supabase = useMemo(() => createClient(), []);
 
   const [settings, setSettings] = useState<RestaurantSettings | null>(null);
   const [loading, setLoading] = useState(true);
+  const [settingsError, setSettingsError] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState('');
   const [availability, setAvailability] = useState<AvailabilityResult | null>(null);
@@ -37,18 +38,21 @@ export default function ReservePage() {
 
   useEffect(() => {
     async function fetchSettings() {
-      const { data } = await supabase.from('restaurant_settings').select('*').single();
-      if (data) {
-        setSettings(data);
-        // Set default date to tomorrow
-        const tomorrow = new Date();
-        tomorrow.setDate(tomorrow.getDate() + 1);
-        setDate(tomorrow.toISOString().split('T')[0]);
+      const { data, error } = await supabase.from('restaurant_settings').select('*').single();
+      if (error || !data) {
+        setSettingsError(true);
+        setLoading(false);
+        return;
       }
+      setSettings(data);
+      // Set default date to tomorrow
+      const tomorrow = new Date();
+      tomorrow.setDate(tomorrow.getDate() + 1);
+      setDate(tomorrow.toISOString().split('T')[0]);
       setLoading(false);
     }
     fetchSettings();
-  }, []);
+  }, [supabase]);
 
   const [closedDay, setClosedDay] = useState(false);
 
@@ -57,12 +61,21 @@ export default function ReservePage() {
     if (!settings || !date) return;
     const dayName = getDayName(date);
     const hours = settings.opening_hours[dayName];
-    if (hours) {
+    if (hours && hours.open && hours.close) {
       setClosedDay(false);
-      const slots = generateTimeSlots(hours.open, hours.close, settings.default_dining_duration_minutes);
+      let slots = generateTimeSlots(hours.open, hours.close, settings.default_dining_duration_minutes);
+
+      // Filter out past time slots if booking for today
+      const today = new Date().toISOString().split('T')[0];
+      if (date === today) {
+        const now = new Date();
+        const currentTime = `${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}`;
+        slots = slots.filter(slot => slot > currentTime);
+      }
+
       setTimeSlots(slots);
-      // Always set the first slot when date changes
       if (slots.length > 0) setTime(slots[0]);
+      else { setTime(''); setAvailability(null); }
     } else {
       setClosedDay(true);
       setTimeSlots([]);
@@ -71,17 +84,13 @@ export default function ReservePage() {
     }
   }, [date, settings]);
 
-  // Check availability when date/time/party size changes
-  useEffect(() => {
+  // Check availability when date/time/party size/settings changes
+  const checkAvailability = useCallback(async () => {
     if (!date || !time || !partySize || !settings) return;
-    checkAvailability();
-  }, [date, time, partySize]);
-
-  async function checkAvailability() {
     setCheckingAvailability(true);
     setAvailability(null);
 
-    const duration = settings?.default_dining_duration_minutes || 90;
+    const duration = settings.default_dining_duration_minutes;
     const endTime = calculateEndTime(time, duration);
 
     // Get all tables that fit the party size
@@ -109,8 +118,9 @@ export default function ReservePage() {
     const occupiedTableIds = new Set<string>();
     if (existingReservations) {
       for (const res of existingReservations) {
-        // Check time overlap: new booking overlaps if it starts before existing ends AND ends after existing starts
-        const overlaps = time < res.end_time && endTime > res.time;
+        const resTime = normalizeTime(res.time);
+        const resEndTime = normalizeTime(res.end_time);
+        const overlaps = time < resEndTime && endTime > resTime;
         if (overlaps && res.table_assignments) {
           for (const ta of res.table_assignments as { table_id: string }[]) {
             occupiedTableIds.add(ta.table_id);
@@ -125,9 +135,8 @@ export default function ReservePage() {
       setAvailability({ available: true, suggestedTable: availableTables[0] });
     } else {
       // Try to suggest nearest available time
-      const allSlots = timeSlots;
       let suggestedTime: string | undefined;
-      for (const slot of allSlots) {
+      for (const slot of timeSlots) {
         if (slot === time) continue;
         const slotEnd = calculateEndTime(slot, duration);
         let slotAvailable = false;
@@ -135,7 +144,9 @@ export default function ReservePage() {
           let tableOccupied = false;
           if (existingReservations) {
             for (const res of existingReservations) {
-              const overlaps = slot < res.end_time && slotEnd > res.time;
+              const resTime = normalizeTime(res.time);
+              const resEndTime = normalizeTime(res.end_time);
+              const overlaps = slot < resEndTime && slotEnd > resTime;
               if (overlaps && res.table_assignments) {
                 for (const ta of res.table_assignments as { table_id: string }[]) {
                   if (ta.table_id === table.id) tableOccupied = true;
@@ -156,7 +167,12 @@ export default function ReservePage() {
       setAvailability({ available: false, suggestedTime });
     }
     setCheckingAvailability(false);
-  }
+  }, [date, time, partySize, settings, supabase, timeSlots]);
+
+  useEffect(() => {
+    if (!date || !time || !partySize || !settings) return;
+    checkAvailability();
+  }, [date, time, partySize, settings, checkAvailability]);
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
@@ -172,6 +188,13 @@ export default function ReservePage() {
       return;
     }
 
+    // Basic phone validation
+    const phoneDigits = phone.replace(/\D/g, '');
+    if (phoneDigits.length < 7) {
+      setError('Please enter a valid phone number.');
+      return;
+    }
+
     setSubmitting(true);
 
     try {
@@ -182,7 +205,6 @@ export default function ReservePage() {
       // Find or create guest
       let guestId: string | null = null;
       if (email) {
-        // Use .maybeSingle() to avoid throwing when no guest is found
         const { data: existingGuest } = await supabase
           .from('guests')
           .select('id, total_visits')
@@ -191,14 +213,10 @@ export default function ReservePage() {
 
         if (existingGuest) {
           guestId = existingGuest.id;
+          // Don't increment total_visits here — it should be incremented when status becomes 'completed'
           await supabase
             .from('guests')
-            .update({
-              total_visits: existingGuest.total_visits + 1,
-              last_visit_at: new Date().toISOString(),
-              name,
-              phone,
-            })
+            .update({ name, phone })
             .eq('id', existingGuest.id);
         }
       }
@@ -206,7 +224,7 @@ export default function ReservePage() {
       if (!guestId) {
         const { data: newGuest } = await supabase
           .from('guests')
-          .insert({ name, email: email || null, phone, total_visits: 1, last_visit_at: new Date().toISOString() })
+          .insert({ name, email: email || null, phone, total_visits: 0 })
           .select('id')
           .single();
         if (newGuest) guestId = newGuest.id;
@@ -260,6 +278,18 @@ export default function ReservePage() {
     );
   }
 
+  if (settingsError) {
+    return (
+      <div className="min-h-screen flex flex-col items-center justify-center px-6">
+        <h1 className="text-2xl font-serif font-bold text-gray-900 mb-4">Unable to Load</h1>
+        <p className="text-gray-500 mb-8">We couldn&apos;t load restaurant settings. Please try again later.</p>
+        <Link href="/" className="text-primary-600 hover:text-primary-700 font-medium">Back to Home</Link>
+      </div>
+    );
+  }
+
+  const tomorrow = new Date();
+  tomorrow.setDate(tomorrow.getDate() + 1);
   const minDate = new Date().toISOString().split('T')[0];
   const maxDate = new Date(Date.now() + (settings?.booking_lead_days || 30) * 86400000).toISOString().split('T')[0];
 
@@ -303,8 +333,11 @@ export default function ReservePage() {
                   className="w-full border border-gray-300 rounded-lg px-3 py-2.5 text-sm focus:ring-2 focus:ring-primary-500 focus:border-primary-500 outline-none"
                   required
                 >
+                  {timeSlots.length === 0 && (
+                    <option value="">No available times</option>
+                  )}
                   {timeSlots.map(slot => (
-                    <option key={slot} value={slot}>{formatTime(slot + ':00')}</option>
+                    <option key={slot} value={slot}>{formatTime(slot)}</option>
                   ))}
                 </select>
               </div>
@@ -330,6 +363,13 @@ export default function ReservePage() {
               </div>
             )}
 
+            {/* No times left today */}
+            {!closedDay && timeSlots.length === 0 && date === new Date().toISOString().split('T')[0] && (
+              <div className="text-sm px-4 py-3 rounded-lg bg-amber-50 text-amber-700 border border-amber-200">
+                No more available time slots for today. Please select a future date.
+              </div>
+            )}
+
             {/* Availability indicator */}
             {checkingAvailability && (
               <p className="text-sm text-gray-400 animate-pulse">Checking availability...</p>
@@ -337,7 +377,7 @@ export default function ReservePage() {
             {availability && !checkingAvailability && (
               <div className={`text-sm px-4 py-3 rounded-lg ${availability.available ? 'bg-green-50 text-green-700 border border-green-200' : 'bg-red-50 text-red-700 border border-red-200'}`}>
                 {availability.available ? (
-                  <>Table available for {partySize} {partySize === 1 ? 'guest' : 'guests'} at {formatTime(time + ':00')}.</>
+                  <>Table available for {partySize} {partySize === 1 ? 'guest' : 'guests'} at {formatTime(time)}.</>
                 ) : (
                   <>
                     No tables available for this time and party size.
@@ -347,7 +387,7 @@ export default function ReservePage() {
                         onClick={() => setTime(availability.suggestedTime!)}
                         className="ml-2 underline font-medium hover:text-red-800"
                       >
-                        Try {formatTime(availability.suggestedTime + ':00')} instead?
+                        Try {formatTime(availability.suggestedTime)} instead?
                       </button>
                     )}
                   </>
@@ -379,6 +419,8 @@ export default function ReservePage() {
                   value={phone}
                   onChange={e => setPhone(e.target.value)}
                   placeholder="+1 (555) 000-0000"
+                  pattern="[+]?[0-9\s\-\(\)]{7,}"
+                  title="Please enter a valid phone number (at least 7 digits)"
                   className="w-full border border-gray-300 rounded-lg px-3 py-2.5 text-sm focus:ring-2 focus:ring-primary-500 focus:border-primary-500 outline-none"
                   required
                 />

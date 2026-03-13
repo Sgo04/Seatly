@@ -1,16 +1,17 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useMemo } from 'react';
 import { createClient } from '@/lib/supabase/client';
-import { formatTime, formatDateShort, getStatusColor } from '@/lib/utils';
+import { formatTime, getStatusColor, normalizeTime, calculateEndTime } from '@/lib/utils';
 import AdminLayout from '@/components/admin/AdminLayout';
 import type { Reservation, Table, ReservationStatus } from '@/types/database';
 
 export default function ReservationsPage() {
-  const supabase = createClient();
+  const supabase = useMemo(() => createClient(), []);
   const [reservations, setReservations] = useState<Reservation[]>([]);
   const [tables, setTables] = useState<Table[]>([]);
   const [loading, setLoading] = useState(true);
+  const [updatingId, setUpdatingId] = useState<string | null>(null);
   const [filterDate, setFilterDate] = useState(new Date().toISOString().split('T')[0]);
   const [filterStatus, setFilterStatus] = useState<string>('all');
   const [assignModalRes, setAssignModalRes] = useState<Reservation | null>(null);
@@ -41,17 +42,43 @@ export default function ReservationsPage() {
   }
 
   async function updateStatus(id: string, status: ReservationStatus) {
+    setUpdatingId(id);
     const { error } = await supabase.from('reservations').update({ status }).eq('id', id);
     if (error) {
       alert('Failed to update status. Please try again.');
+      setUpdatingId(null);
       return;
     }
+
+    // If completing a reservation, increment guest visit count
+    if (status === 'completed') {
+      const res = reservations.find(r => r.id === id);
+      if (res?.guest_id) {
+        const { data: guest } = await supabase
+          .from('guests')
+          .select('id, total_visits')
+          .eq('id', res.guest_id)
+          .single();
+        if (guest) {
+          await supabase.from('guests').update({
+            total_visits: guest.total_visits + 1,
+            last_visit_at: new Date().toISOString(),
+          }).eq('id', guest.id);
+        }
+      }
+    }
+
+    setUpdatingId(null);
     fetchData();
   }
 
   async function assignTable(reservationId: string, tableId: string) {
     // Remove existing assignment
-    await supabase.from('table_assignments').delete().eq('reservation_id', reservationId);
+    const { error: deleteError } = await supabase.from('table_assignments').delete().eq('reservation_id', reservationId);
+    if (deleteError) {
+      alert('Failed to update table assignment. Please try again.');
+      return;
+    }
     // Create new assignment
     const { error } = await supabase.from('table_assignments').insert({ reservation_id: reservationId, table_id: tableId });
     if (error) {
@@ -60,6 +87,30 @@ export default function ReservationsPage() {
     }
     setAssignModalRes(null);
     fetchData();
+  }
+
+  // Get tables that are occupied during the modal reservation's time window
+  function getOccupiedTableIds(): Set<string> {
+    const occupied = new Set<string>();
+    if (!assignModalRes) return occupied;
+
+    const resTime = normalizeTime(assignModalRes.time);
+    const resEndTime = normalizeTime(assignModalRes.end_time);
+
+    for (const r of reservations) {
+      if (r.id === assignModalRes.id) continue;
+      if (!['confirmed', 'seated'].includes(r.status)) continue;
+      const rTime = normalizeTime(r.time);
+      const rEnd = normalizeTime(r.end_time);
+      const overlaps = resTime < rEnd && resEndTime > rTime;
+      if (overlaps) {
+        const assignments = ((r as Reservation & { table_assignments?: { table_id: string }[] }).table_assignments || []);
+        for (const ta of assignments) {
+          occupied.add(ta.table_id);
+        }
+      }
+    }
+    return occupied;
   }
 
   function getAssignedTable(res: Reservation & { table_assignments?: { table_id: string; tables?: { table_number: string; capacity: number } }[] }) {
@@ -158,13 +209,13 @@ export default function ReservationsPage() {
                           <div className="flex flex-wrap gap-1">
                             {res.status === 'confirmed' && (
                               <>
-                                <button onClick={() => updateStatus(res.id, 'seated')} className="px-2 py-1 text-xs bg-green-100 text-green-700 rounded hover:bg-green-200">Seat</button>
-                                <button onClick={() => updateStatus(res.id, 'no_show')} className="px-2 py-1 text-xs bg-amber-100 text-amber-700 rounded hover:bg-amber-200">No-Show</button>
-                                <button onClick={() => updateStatus(res.id, 'cancelled')} className="px-2 py-1 text-xs bg-red-100 text-red-700 rounded hover:bg-red-200">Cancel</button>
+                                <button disabled={updatingId === res.id} onClick={() => updateStatus(res.id, 'seated')} className="px-2 py-1 text-xs bg-green-100 text-green-700 rounded hover:bg-green-200 disabled:opacity-50">Seat</button>
+                                <button disabled={updatingId === res.id} onClick={() => updateStatus(res.id, 'no_show')} className="px-2 py-1 text-xs bg-amber-100 text-amber-700 rounded hover:bg-amber-200 disabled:opacity-50">No-Show</button>
+                                <button disabled={updatingId === res.id} onClick={() => updateStatus(res.id, 'cancelled')} className="px-2 py-1 text-xs bg-red-100 text-red-700 rounded hover:bg-red-200 disabled:opacity-50">Cancel</button>
                               </>
                             )}
                             {res.status === 'seated' && (
-                              <button onClick={() => updateStatus(res.id, 'completed')} className="px-2 py-1 text-xs bg-gray-100 text-gray-700 rounded hover:bg-gray-200">Complete</button>
+                              <button disabled={updatingId === res.id} onClick={() => updateStatus(res.id, 'completed')} className="px-2 py-1 text-xs bg-gray-100 text-gray-700 rounded hover:bg-gray-200 disabled:opacity-50">Complete</button>
                             )}
                           </div>
                         </td>
@@ -180,26 +231,43 @@ export default function ReservationsPage() {
 
       {/* Table Assignment Modal */}
       {assignModalRes && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/30 overflow-hidden" onClick={() => setAssignModalRes(null)}>
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/30" onClick={() => setAssignModalRes(null)}>
           <div className="bg-white rounded-xl shadow-xl w-full max-w-md p-6" onClick={e => e.stopPropagation()}>
             <h3 className="text-lg font-semibold mb-4">
               Assign Table — {assignModalRes.guest_name} (Party of {assignModalRes.party_size})
             </h3>
             <div className="space-y-2 max-h-64 overflow-y-auto">
-              {tables
-                .filter(t => t.capacity >= assignModalRes.party_size)
-                .map(table => (
+              {(() => {
+                const occupiedIds = getOccupiedTableIds();
+                const availableTables = tables
+                  .filter(t => t.capacity >= assignModalRes.party_size)
+                  .map(table => ({ ...table, isOccupied: occupiedIds.has(table.id) }));
+
+                if (availableTables.length === 0) {
+                  return <p className="text-sm text-gray-400 py-4 text-center">No tables can fit this party size</p>;
+                }
+
+                return availableTables.map(table => (
                   <button
                     key={table.id}
-                    onClick={() => assignTable(assignModalRes.id, table.id)}
-                    className="w-full text-left px-4 py-3 border border-gray-200 rounded-lg hover:bg-primary-50 hover:border-primary-200 transition"
+                    onClick={() => !table.isOccupied && assignTable(assignModalRes.id, table.id)}
+                    disabled={table.isOccupied}
+                    className={`w-full text-left px-4 py-3 border rounded-lg transition ${
+                      table.isOccupied
+                        ? 'border-gray-100 bg-gray-50 opacity-50 cursor-not-allowed'
+                        : 'border-gray-200 hover:bg-primary-50 hover:border-primary-200'
+                    }`}
                   >
                     <span className="font-medium">{table.table_number}</span>
                     <span className="text-gray-500 text-sm ml-2">
-                      Seats {table.capacity} · {table.location}
+                      Seats {table.capacity}{table.location ? ` · ${table.location}` : ''}
                     </span>
+                    {table.isOccupied && (
+                      <span className="text-xs text-red-500 ml-2">(occupied)</span>
+                    )}
                   </button>
-                ))}
+                ));
+              })()}
             </div>
             <button
               onClick={() => setAssignModalRes(null)}
