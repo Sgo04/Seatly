@@ -1,0 +1,19 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(npx create-next-app@latest . --typescript --tailwind --eslint --app --src-dir --import-alias \"@/*\" --use-npm)",
+      "Bash(npm --version)",
+      "Bash(export PATH=\"/usr/local/bin:/opt/homebrew/bin:$HOME/.nvm/versions/node/*/bin:$PATH\")",
+      "Bash(source ~/.zshrc)",
+      "Bash(source ~/.nvm/nvm.sh)",
+      "Bash(source ~/.bashrc)",
+      "Read(//opt/homebrew/bin/**)",
+      "Read(//opt/**)",
+      "Read(//Users/kyle/**)",
+      "Bash(curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/v0.40.1/install.sh)",
+      "Bash(bash)",
+      "mcp__Claude_Preview__preview_start",
+      "Bash(pbcopy)"
+    ]
+  }
+}
