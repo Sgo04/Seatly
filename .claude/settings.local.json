@@ -13,7 +13,15 @@
       "Bash(curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/v0.40.1/install.sh)",
       "Bash(bash)",
       "mcp__Claude_Preview__preview_start",
-      "Bash(pbcopy)"
+      "Bash(pbcopy)",
+      "Bash(gh auth:*)",
+      "Bash(git remote:*)",
+      "Bash(git push:*)",
+      "Bash(ls ~/.ssh/id_*)",
+      "Bash(ssh-keygen -t ed25519 -C \"kyle@seatly\" -f ~/.ssh/id_ed25519 -N \"\")",
+      "Bash(ssh -o StrictHostKeyChecking=no -T git@github.com)",
+      "Bash(npm install:*)",
+      "Bash(npx next:*)"
     ]
   }
 }
